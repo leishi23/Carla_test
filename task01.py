@@ -9,7 +9,7 @@ import queue
 import datetime
 import carla
 import random
-import time
+
 
 try:
     sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
@@ -19,24 +19,31 @@ try:
 except IndexError:
     pass
 
+try:
+    # to delete the rgb images folder
+    location = "/home/lshi23/research_course_code"
+    dir01 = "rgb_out"
+    path01 = os.path.join(location, dir01)
+    if os.path.exists(path01):
+        shutil.rmtree(path01)
 
-# to delete the rgb images folder
-location = "/home/lshi23/research_course_code"
-dir01 = "rgb_out"
-path01 = os.path.join(location, dir01)
-if os.path.exists(path01):
-    shutil.rmtree(path01)
-
-# to delete the depth images folder
-dir02 = "depth_out"
-path02 = os.path.join(location, dir02)
-if os.path.exists(path02):
-    shutil.rmtree(path02)
+    # to delete the depth images folder
+    dir02 = "depth_out"
+    path02 = os.path.join(location, dir02)
+    if os.path.exists(path02):
+        shutil.rmtree(path02)
+finally:
+    pass
 
 
-def process_img(data, queue, freq_message):
-    queue.put(data)
-    freq_message.put(1)
+def process_img(data, rgb_queue, rgb_freq_message):
+    rgb_queue.put(data)
+    rgb_freq_message.put(1)
+
+
+def process_dp(data, dp_queue, dp_freq_message):
+    dp_queue.put(data)
+    dp_freq_message.put(1)
 
 
 def process_imu(data):
@@ -90,6 +97,8 @@ try:
     client.start_recorder("/home/carla/recording01.log")
     IM_WIDTH = 640
     IM_HEIGHT = 480
+    DP_IM_WIDTH = 800
+    DP_IM_HEIGHT = 600
 
     # settings = world.get_settings()
     # settings.synchronous_mode = True  # Enables synchronous mode
@@ -125,8 +134,8 @@ try:
             npc.set_autopilot(True)
             # print('created %s' % npc.type_id)
 
-    # ego_vehicle.set_autopilot(True)
-    ego_vehicle.apply_control(carla.VehicleControl(throttle=0.1))
+    ego_vehicle.set_autopilot(True)
+    # ego_vehicle.apply_control(carla.VehicleControl(throttle=0.1))
 
     # Create a transform to place the camera on top of the vehicle
     camera_transform = carla.Transform(carla.Location(x=0.5, z=2.5))
@@ -140,6 +149,9 @@ try:
     # camera_bp.set_attribute("sensor_tick", "0.0666")
 
     camera_dp = world.get_blueprint_library().find('sensor.camera.depth')
+    camera_dp.set_attribute("image_size_x", f"{DP_IM_WIDTH}")
+    camera_dp.set_attribute("image_size_y", f"{DP_IM_HEIGHT}")
+
     imu_bp = world.get_blueprint_library().find('sensor.other.imu')
     gnss_bp = world.get_blueprint_library().find('sensor.other.gnss')
 
@@ -168,21 +180,30 @@ try:
     # print('created %s' % lidar.type_id)
 
     # The sensor data will be saved in thread-safe Queues
-    image_queue = queue.Queue(maxsize=1)
+    rgb_image_queue = queue.Queue(maxsize=1)
+    dp_image_queue = queue.Queue(maxsize=1)
+    rgb_freq_message = queue.Queue()
+    dp_freq_message = queue.Queue()
     count = 0
     freq_count = 0
     start_time = datetime.datetime.now()
-    freq_message = queue.Queue()
 
-    camera01.listen(lambda data: process_img(data, image_queue, freq_message))
+    camera01.listen(lambda data: process_img(data, rgb_image_queue, rgb_freq_message))
+    camera02.listen(lambda data: process_dp(data, dp_image_queue, dp_freq_message))
     fig, ax = plt.subplots()
+    fig_dp, ax_dp = plt.subplots()
     array = np.random.randint(0, 100, size=(IM_HEIGHT, IM_WIDTH), dtype=np.uint8)
+    dp_array = np.random.randint(0, 100, size=(DP_IM_HEIGHT, DP_IM_WIDTH), dtype=np.uint8)
     l = ax.imshow(array)
+    ax.set_title('RGB')
+    l_dp = ax_dp.imshow(dp_array, cmap='gray', interpolation='nearest', vmin=0, vmax=255)
+    ax_dp.set_title('Depth')
 
     while world is not None:
         try:
             # Get the data once it's received.
-            image_data = image_queue.get(True)
+            image_data = rgb_image_queue.get(True)
+            dp_data = dp_image_queue.get(True)
         except queue.Empty:
             print("[Warning] Some sensor data has been missed")
             continue
@@ -192,17 +213,37 @@ try:
         im_array = np.reshape(im_array, (image_data.height, image_data.width, 4))
         im_array = im_array[:, :, :3][:, :, ::-1]
         l.set_data(im_array)
+
+        dp_array = np.copy(np.frombuffer(dp_data.raw_data, dtype=np.dtype("uint8")))
+        dp_array = np.reshape(dp_array, (dp_data.height, dp_data.width, 4))
+        dp_array = dp_array.astype(np.float32)
+        # Apply (R + G * 256 + B * 256 * 256) / (256 * 256 * 256 - 1).
+        normalized_depth = np.dot(dp_array[:, :, :3], [65536.0, 256.0, 1.0])
+        normalized_depth /= 16777215.0  # (256.0 * 256.0 * 256.0 - 1.0)
+        # Convert to logarithmic depth.
+        logdepth = np.ones(normalized_depth.shape) + \
+            (np.log(normalized_depth) / 5.70378)
+        logdepth = np.clip(logdepth, 0.0, 1.0)
+        logdepth *= 255.0
+        # Expand to three colors.
+        dp_array = np.repeat(logdepth[:, :, np.newaxis], 3, axis=2)
+        l_dp.set_data(dp_array)
+
         plt.pause(0.001)
         count += 1
         if (datetime.datetime.now() - start_time).seconds == 1:
             start_time = datetime.datetime.now()
             frequency = count - freq_count
             freq_count = count
-            print('Frequency of message is: %s' % freq_message.qsize())
+            print('Frequency of rgb_message is: %s' % rgb_freq_message.qsize())
+            print('Frequency of dp_message is: %s' % dp_freq_message.qsize())
             print('Frequency of while loop is: %s' % frequency)
-            freq_message = queue.Queue()
-            with freq_message.mutex:
-                freq_message.queue.clear()
+            rgb_freq_message = queue.Queue()
+            with rgb_freq_message.mutex:
+                rgb_freq_message.queue.clear()
+            dp_freq_message = queue.Queue()
+            with dp_freq_message.mutex:
+                dp_freq_message.queue.clear()
 
         # camera01.listen(lambda image: image.save_to_disk('rgb_out/%06d.png' % image.frame))
         # camera02.listen(lambda data: data.save_to_disk("depth_out/%06d.png" % data.frame, carla.ColorConverter.LogarithmicDepth))
