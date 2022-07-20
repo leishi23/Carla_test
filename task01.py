@@ -1,4 +1,3 @@
-from cgitb import reset
 import glob
 import os
 import shutil
@@ -216,7 +215,7 @@ try:
 
         dp_array = np.copy(np.frombuffer(dp_data.raw_data, dtype=np.dtype("uint8")))
         dp_array = np.reshape(dp_array, (dp_data.height, dp_data.width, 4))
-        dp_array = dp_array.astype(np.float32)
+        dp_array = dp_array.astype(np.float32) # since it's a float, so to make its range [0,1]
         # Apply (R + G * 256 + B * 256 * 256) / (256 * 256 * 256 - 1).
         normalized_depth = np.dot(dp_array[:, :, :3], [65536.0, 256.0, 1.0])
         normalized_depth /= 16777215.0  # (256.0 * 256.0 * 256.0 - 1.0)
@@ -224,7 +223,6 @@ try:
         logdepth = np.ones(normalized_depth.shape) + \
             (np.log(normalized_depth) / 5.70378)
         logdepth = np.clip(logdepth, 0.0, 1.0)
-        logdepth *= 255.0
         # Expand to three colors.
         dp_array = np.repeat(logdepth[:, :, np.newaxis], 3, axis=2)
         l_dp.set_data(dp_array)
