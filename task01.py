@@ -8,6 +8,7 @@ import queue
 import datetime
 import carla
 import random
+from IPython.display import display, clear_output
 
 
 try:
@@ -45,14 +46,9 @@ def process_dp(data, dp_queue, dp_freq_message):
     dp_freq_message.put(1)
 
 
-def process_imu(data):
-    angular_vel = data.gyroscope
-    acceleration = data.accelerometer
-    print(2 * "\n")
-    print('angular_vel')
-    print(angular_vel)
-    print('acceleration')
-    print(acceleration)
+def process_imu(data, imu_angular_vel_queue, imu_acceleration_queue):
+    imu_angular_vel_queue.put(data.gyroscope)
+    imu_acceleration_queue.put(data.accelerometer)
 
 
 def process_gnss(data):
@@ -181,77 +177,136 @@ try:
     # The sensor data will be saved in thread-safe Queues
     rgb_image_queue = queue.Queue(maxsize=1)
     dp_image_queue = queue.Queue(maxsize=1)
+    imu_angular_vel_queue = queue.Queue(maxsize=1)
+    imu_acceleration_queue = queue.Queue(maxsize=1)
     rgb_freq_message = queue.Queue()
     dp_freq_message = queue.Queue()
     count = 0
     freq_count = 0
     start_time = datetime.datetime.now()
 
-    camera01.listen(lambda data: process_img(data, rgb_image_queue, rgb_freq_message))
-    camera02.listen(lambda data: process_dp(data, dp_image_queue, dp_freq_message))
-    fig, ax = plt.subplots()
-    fig_dp, ax_dp = plt.subplots()
-    array = np.random.randint(0, 100, size=(IM_HEIGHT, IM_WIDTH), dtype=np.uint8)
-    dp_array = np.random.randint(0, 100, size=(DP_IM_HEIGHT, DP_IM_WIDTH), dtype=np.uint8)
-    l = ax.imshow(array)
-    ax.set_title('RGB')
-    l_dp = ax_dp.imshow(dp_array, cmap='gray', interpolation='nearest', vmin=0, vmax=255)
-    ax_dp.set_title('Depth')
+    # camera01.listen(lambda data: process_img(data, rgb_image_queue, rgb_freq_message))
+    # camera02.listen(lambda data: process_dp(data, dp_image_queue, dp_freq_message))
+    IMU.listen(lambda data: process_imu(data, imu_angular_vel_queue, imu_acceleration_queue))
 
+    # initial plot part
+    # RGB & Depth camera
+    # fig, ax = plt.subplots()
+    # fig_dp, ax_dp = plt.subplots()
+    # array = np.random.randint(0, 100, size=(IM_HEIGHT, IM_WIDTH), dtype=np.uint8)
+    # dp_array = np.random.randint(0, 100, size=(DP_IM_HEIGHT, DP_IM_WIDTH), dtype=np.uint8)
+    # l = ax.imshow(array)
+    # ax.set_title('RGB')
+    # l_dp = ax_dp.imshow(dp_array, cmap='gray', interpolation='nearest', vmin=0, vmax=255)
+    # ax_dp.set_title('Depth')
+    # IMU acceleration and angular velocity
+    plt.ion()
+    fig_imu, ((ax_wx, ax_wy), (ax_wz, ax_ax), (ax_ay, ax_az)) = plt.subplots(nrows=3, ncols=2)
+    imu_time = 0
+    imu_x = list()
+    wx = list()
+    wy = list()
+    wz = list()
+    ax = list()
+    ay = list()
+    az = list()
+    ax_wx.set_title('angular x-velocity', fontsize=10)
+    ax_wy.set_title('angular y-velocity', fontsize=10)
+    ax_wz.set_title('angular z-velocity', fontsize=10)
+    ax_ax.set_title('x-acceleration', fontsize=10)
+    ax_ay.set_title('y-acceleration', fontsize=10)
+    ax_az.set_title('z-acceleration', fontsize=10)
+    fig_imu.tight_layout()
+
+    # update the plot data
     while world is not None:
         try:
             # Get the data once it's received.
-            image_data = rgb_image_queue.get(True)
-            dp_data = dp_image_queue.get(True)
+            # image_data = rgb_image_queue.get(True)
+            # dp_data = dp_image_queue.get(True)
+            angular_vel_data = imu_angular_vel_queue.get(True)
+            acceleration_data = imu_acceleration_queue.get(True)
         except queue.Empty:
             print("[Warning] Some sensor data has been missed")
             continue
 
-        # Get the raw BGRA buffer and convert it to an array of RGB of shape (image_data.height, image_data.width, 3).
-        im_array = np.copy(np.frombuffer(image_data.raw_data, dtype=np.dtype("uint8")))
-        im_array = np.reshape(im_array, (image_data.height, image_data.width, 4))
-        im_array = im_array[:, :, :3][:, :, ::-1]
-        l.set_data(im_array)
+        # # RGB:Get the raw BGRA buffer and convert it to an array of RGB as shape (image_data.height, image_data.width, 3).
+        # im_array = np.copy(np.frombuffer(image_data.raw_data, dtype=np.dtype("uint8")))
+        # im_array = np.reshape(im_array, (image_data.height, image_data.width, 4))
+        # im_array = im_array[:, :, :3][:, :, ::-1]
+        # l.set_data(im_array)
+        #
+        # # Depth: use my own ColorConverter
+        # dp_array = np.copy(np.frombuffer(dp_data.raw_data, dtype=np.dtype("uint8")))
+        # dp_array = np.reshape(dp_array, (dp_data.height, dp_data.width, 4))
+        # dp_array = dp_array.astype(np.float32) # since it's a float, so to make its range [0,1]
+        # # Apply (R + G * 256 + B * 256 * 256) / (256 * 256 * 256 - 1).
+        # normalized_depth = np.dot(dp_array[:, :, :3], [65536.0, 256.0, 1.0])
+        # normalized_depth /= 16777215.0  # (256.0 * 256.0 * 256.0 - 1.0)
+        # # Convert to logarithmic depth.
+        # logdepth = np.ones(normalized_depth.shape) + \
+        #     (np.log(normalized_depth) / 5.70378)
+        # logdepth = np.clip(logdepth, 0.0, 1.0)
+        # # Expand to three colors.
+        # dp_array = np.repeat(logdepth[:, :, np.newaxis], 3, axis=2)
+        # l_dp.set_data(dp_array)
 
-        dp_array = np.copy(np.frombuffer(dp_data.raw_data, dtype=np.dtype("uint8")))
-        dp_array = np.reshape(dp_array, (dp_data.height, dp_data.width, 4))
-        dp_array = dp_array.astype(np.float32) # since it's a float, so to make its range [0,1]
-        # Apply (R + G * 256 + B * 256 * 256) / (256 * 256 * 256 - 1).
-        normalized_depth = np.dot(dp_array[:, :, :3], [65536.0, 256.0, 1.0])
-        normalized_depth /= 16777215.0  # (256.0 * 256.0 * 256.0 - 1.0)
-        # Convert to logarithmic depth.
-        logdepth = np.ones(normalized_depth.shape) + \
-            (np.log(normalized_depth) / 5.70378)
-        logdepth = np.clip(logdepth, 0.0, 1.0)
-        # Expand to three colors.
-        dp_array = np.repeat(logdepth[:, :, np.newaxis], 3, axis=2)
-        l_dp.set_data(dp_array)
+        # IMU: angular vel & acceleration
+        imu_time += 1
+        angular_vel_x_array = np.array(angular_vel_data.x)
+        angular_vel_y_array = np.array(angular_vel_data.y)
+        angular_vel_z_array = np.array(angular_vel_data.z)
+        acceleration_x_array = np.array(acceleration_data.x)
+        acceleration_y_array = np.array(acceleration_data.y)
+        acceleration_z_array = np.array(acceleration_data.z)
+        imu_x.append(imu_time)
+        wx.append(angular_vel_x_array)
+        wy.append(angular_vel_y_array)
+        wz.append(angular_vel_z_array)
+        ax.append(acceleration_x_array)
+        ay.append(acceleration_y_array)
+        az.append(acceleration_z_array)
+        if imu_time > 6:
+            ax_wx.set_xlim(imu_time-5, imu_time)
+            # ax_wx.cla()
+            ax_wy.set_xlim(imu_time-5, imu_time)
+            # ax_wy.cla()
+            ax_wz.set_xlim(imu_time-5, imu_time)
+            # ax_wz.cla()
+            ax_ax.set_xlim(imu_time-5, imu_time)
+            # ax_ax.cla()
+            ax_ay.set_xlim(imu_time-5, imu_time)
+            # ax_ay.cla()
+            ax_az.set_xlim(imu_time-5, imu_time)
+            # ax_az.cla()
+        ax_wx.scatter(imu_time, angular_vel_x_array)
+        ax_wy.scatter(imu_time, angular_vel_y_array)
+        ax_wz.scatter(imu_time, angular_vel_z_array)
+        ax_ax.scatter(imu_time, acceleration_x_array)
+        ax_ay.scatter(imu_time, acceleration_y_array)
+        ax_az.scatter(imu_time, acceleration_z_array)
+        # display(fig_imu)
+        # clear_output(wait=True)
+        plt.show()
 
-        plt.pause(0.001)
-        count += 1
-        if (datetime.datetime.now() - start_time).seconds == 1:
-            start_time = datetime.datetime.now()
-            frequency = count - freq_count
-            freq_count = count
-            print('Frequency of rgb_message is: %s' % rgb_freq_message.qsize())
-            print('Frequency of dp_message is: %s' % dp_freq_message.qsize())
-            print('Frequency of while loop is: %s' % frequency)
-            rgb_freq_message = queue.Queue()
-            with rgb_freq_message.mutex:
-                rgb_freq_message.queue.clear()
-            dp_freq_message = queue.Queue()
-            with dp_freq_message.mutex:
-                dp_freq_message.queue.clear()
+        plt.pause(0.1)
+        # count += 1
+        # if (datetime.datetime.now() - start_time).seconds == 1:
+        #     start_time = datetime.datetime.now()
+        #     frequency = count - freq_count
+        #     freq_count = count
+        #     print('Frequency of rgb_message is: %s' % rgb_freq_message.qsize())
+        #     print('Frequency of dp_message is: %s' % dp_freq_message.qsize())
+        #     print('Frequency of while loop is: %s' % frequency)
+        #     rgb_freq_message = queue.Queue()
+        #     with rgb_freq_message.mutex:
+        #         rgb_freq_message.queue.clear()
+        #     dp_freq_message = queue.Queue()
+        #     with dp_freq_message.mutex:
+        #         dp_freq_message.queue.clear()
 
-        # camera01.listen(lambda image: image.save_to_disk('rgb_out/%06d.png' % image.frame))
-        # camera02.listen(lambda data: data.save_to_disk("depth_out/%06d.png" % data.frame, carla.ColorConverter.LogarithmicDepth))
-        # IMU.listen(lambda data: process_imu(data))
         # GNSS.listen(lambda data: process_gnss(data))
         # lidar.listen(lambda data: process_lidar(data))
-
-        # time.sleep(10)
-
-        # plt.show()
 
 finally:
     print("Over")
