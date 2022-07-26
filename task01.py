@@ -8,6 +8,7 @@ import queue
 import datetime
 import carla
 import random
+import math
 
 
 try:
@@ -20,7 +21,7 @@ except IndexError:
 
 try:
     # to delete the rgb images folder
-    location = "/home/lshi23/research_course_code"
+    location = "/home/lshi23/research_code"
     dir01 = "rgb_out"
     path01 = os.path.join(location, dir01)
     if os.path.exists(path01):
@@ -31,6 +32,12 @@ try:
     path02 = os.path.join(location, dir02)
     if os.path.exists(path02):
         shutil.rmtree(path02)
+
+    # to delete the depth images folder
+    dir03 = "lidar_out"
+    path03 = os.path.join(location, dir03)
+    if os.path.exists(path03):
+        shutil.rmtree(path03)
 finally:
     pass
 
@@ -82,11 +89,13 @@ try:
 
     # spawn points for vehicles
     spawn_points = world.get_map().get_spawn_points()
-    ego_vehicle = world.spawn_actor(random.choice(vehicle_blueprints), random.choice(spawn_points))
+    # ego_vehicle = world.spawn_actor(random.choice(vehicle_blueprints), random.choice(spawn_points))
+    ego_bp = world.get_blueprint_library().find('vehicle.audi.tt')
+    ego_vehicle = world.spawn_actor(ego_bp, random.choice(spawn_points))
     actor_list.append(ego_vehicle)
     print('created ego_%s' % ego_vehicle.type_id)
 
-    for _ in range(0, 10):
+    for _ in range(0, 100):
         # This time we are using try_spawn_actor. If the spot is already
         # occupied by another object, the function will return None.
         npc = world.try_spawn_actor(random.choice(vehicle_blueprints), random.choice(spawn_points))
@@ -100,7 +109,6 @@ try:
 
     # Create a transform to place the camera on top of the vehicle
     camera_transform = carla.Transform(carla.Location(x=0.5, z=2.5))
-    lidar_transform = carla.Transform(carla.Location(x=0.5, z=1.5))
 
     # We create sensors through a blueprint that defines its properties
     camera_bp = world.get_blueprint_library().find('sensor.camera.rgb')
@@ -117,9 +125,14 @@ try:
     gnss_bp = world.get_blueprint_library().find('sensor.other.gnss')
 
     lidar_bp = world.get_blueprint_library().find('sensor.lidar.ray_cast')
-    lidar_bp.set_attribute('dropoff_general_rate', '0.0')
-    lidar_bp.set_attribute('dropoff_intensity_limit', '1.0')
-    lidar_bp.set_attribute('dropoff_zero_intensity', '0.0')
+    lidar_bp.set_attribute('channels', str(32))
+    lidar_bp.set_attribute('points_per_second', str(90000))
+    lidar_bp.set_attribute('rotation_frequency', str(40))
+    lidar_bp.set_attribute('range', str(20))
+    lidar_bp.set_attribute('lower_fov', str(-25))
+    lidar_location = carla.Location(0, 0, 2)
+    lidar_rotation = carla.Rotation(0, 0, 0)
+    lidar_transform = carla.Transform(lidar_location, lidar_rotation)
 
     # We spawn the camera and attach it to our ego vehicle
     camera01 = world.spawn_actor(camera_bp, camera_transform, attach_to=ego_vehicle)
@@ -156,6 +169,7 @@ try:
     # camera02.listen(lambda data: process_dp(data, dp_image_queue, dp_freq_message))
     # IMU.listen(lambda data: process_imu(data, imu_angular_vel_queue, imu_acceleration_queue))
     lidar.listen(lambda data: process_lidar(data, lidar_queue))
+    # lidar.listen(lambda data: data.save_to_disk('lidar_out/%06d.ply' % data.frame))
 
     ############################### initial plot part #############################
     # RGB & Depth camera
@@ -206,18 +220,29 @@ try:
     # ax_vz.set_title('z-velocity', fontsize=10)
     # fig_get.tight_layout()
 
+    # Nearest obstacle with LiDAR
+    plt.ion()
+    fig_lidar, (ax_dist, ax_angle) = plt.subplots(nrows=1, ncols=2)
+    lidar_time = 0
+    lidar_x = list()
+    dist = list()
+    ang = list()
+    ax_dist.set_title('nearest-obs distance', fontsize=10)
+    ax_angle.set_title('nearest-obs angle', fontsize=10)
+    fig_lidar.tight_layout()
+
     # update the plot data
     while world is not None:
-        location_queue.put(ego_vehicle.get_location())
-        vel_queue.put(ego_vehicle.get_velocity())
+    #     location_queue.put(ego_vehicle.get_location())
+    #     vel_queue.put(ego_vehicle.get_velocity())
         try:
             # Get the data once it's received.
             # image_data = rgb_image_queue.get(True)
             # dp_data = dp_image_queue.get(True)
             # angular_vel_data = imu_angular_vel_queue.get(True)
             # acceleration_data = imu_acceleration_queue.get(True)
-            location_data = location_queue.get(True)
-            vel_data = vel_queue.get(True)
+            # location_data = location_queue.get(True)
+            # vel_data = vel_queue.get(True)
             lidar_data = lidar_queue.get(True)
         except queue.Empty:
             print("[Warning] Some sensor data has been missed")
@@ -311,7 +336,6 @@ try:
         p_cloud_size = len(lidar_data)
         p_cloud = np.copy(np.frombuffer(lidar_data.raw_data, dtype=np.dtype('f4')))
         p_cloud = np.reshape(p_cloud, (p_cloud_size, 4))
-        angle = lidar_data.horizontal_angle
 
         # Point cloud in lidar sensor space array of shape (p_cloud_size, 3).
         local_lidar_points = np.array(p_cloud[:, :3])
@@ -322,11 +346,25 @@ try:
             distance.append(temp)
 
         nearest_dist = min(distance)
+        min_idx = distance.index(nearest_dist)
+        min_x = local_lidar_points[min_idx][0]
+        min_y = local_lidar_points[min_idx][1]
+        angle = math.atan2(min_y, min_x)
+        angle = math.degrees(angle)
+        if lidar_time > 6:
+            ax_dist.set_xlim(lidar_time-5, lidar_time)
+            ax_angle.set_xlim(lidar_time-5, lidar_time)
+
         if nearest_dist < 3:
-            print("Obstacle!")
             print(nearest_dist)
             print(angle)
-            print("\n")
+            lidar_time += 1
+            lidar_x.append(lidar_time)
+            dist.append(nearest_dist)
+            ang.append(angle)
+            ax_dist.scatter(lidar_time, nearest_dist)
+            ax_angle.scatter(lidar_time, angle)
+            plt.show()
 
         plt.pause(0.1)
         # count += 1
